@@ -1,0 +1,2 @@
+eas build -p android --profile preview -- local run
+npx expo start -c -- run app
