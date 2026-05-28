@@ -7,6 +7,9 @@ import {
   StyleSheet,
   View,
 } from "react-native";
+import Constants from "expo-constants";
+import * as Device from "expo-device";
+import * as Notifications from "expo-notifications";
 import { WebView } from "react-native-webview";
 
 const APP_URL = "https://calcutta-canvas-space.vercel.app/";
@@ -28,11 +31,71 @@ const INJECTED_JS = `
 })();
 `.trim();
 
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
+
+async function registerForPushNotificationsAsync() {
+  if (!Device.isDevice) {
+    console.log("Push notifications require a physical device.");
+    return null;
+  }
+
+  const { status: existingStatus } = await Notifications.getPermissionsAsync();
+  let finalStatus = existingStatus;
+
+  if (existingStatus !== "granted") {
+    const { status } = await Notifications.requestPermissionsAsync();
+    finalStatus = status;
+  }
+
+  if (finalStatus !== "granted") {
+    console.log("Notification permission not granted.");
+    return null;
+  }
+
+  const projectId =
+    Constants.expoConfig?.extra?.eas?.projectId ||
+    Constants.easConfig?.projectId;
+  const token = await Notifications.getExpoPushTokenAsync(
+    projectId ? { projectId } : undefined,
+  );
+  console.log("Expo push token:", token.data);
+  return token.data;
+}
+
 export default function App() {
   const webViewRef = useRef<WebView>(null);
   const waitingRef = useRef(false);
+  const pushTokenRef = useRef<string | null>(null);
   // Track whether the web app is ready to receive messages
   const webReadyRef = useRef(false);
+
+  const sendPushTokenToWeb = (token: string | null) => {
+    if (!token || !webViewRef.current || !webReadyRef.current) return;
+
+    webViewRef.current.postMessage(
+      JSON.stringify({
+        type: "PUSH_TOKEN",
+        token,
+        platform: Platform.OS,
+        deviceName: Device.deviceName || "",
+      }),
+    );
+  };
+
+  useEffect(() => {
+    registerForPushNotificationsAsync().then((token) => {
+      pushTokenRef.current = token;
+      sendPushTokenToWeb(token);
+    });
+  }, []);
 
   // ── Android back / side-slide gesture ──────────────────────────────────
   useEffect(() => {
@@ -105,6 +168,7 @@ export default function App() {
 
       if (data.type === "WEB_READY") {
         webReadyRef.current = true;
+        sendPushTokenToWeb(pushTokenRef.current);
         return;
       }
     } catch (e) {
@@ -126,6 +190,7 @@ export default function App() {
           // Mark web as ready once the page finishes loading
           onLoadEnd={() => {
             webReadyRef.current = true;
+            sendPushTokenToWeb(pushTokenRef.current);
           }}
           allowsInlineMediaPlayback
           mediaPlaybackRequiresUserAction={false}
