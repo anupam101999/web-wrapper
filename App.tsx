@@ -42,6 +42,13 @@ Notifications.setNotificationHandler({
 });
 
 async function registerForPushNotificationsAsync() {
+  if (Constants.executionEnvironment === "storeClient") {
+    console.log(
+      "Push notifications are skipped in Expo Go. Use a development build or production build for remote notifications.",
+    );
+    return null;
+  }
+
   if (!Device.isDevice) {
     console.log("Push notifications require a physical device.");
     return null;
