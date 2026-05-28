@@ -21,10 +21,6 @@ const webFrameStyle: React.CSSProperties = {
   border: "none",
 };
 
-// Runs before any page JS.
-// Registers window.__rnBackPress which App.jsx (web) also sets up.
-// Having it here too means it works even if the web app's hook
-// hasn't mounted yet (e.g. during page load).
 const INJECTED_JS = `
 (function () {
   true;
@@ -43,9 +39,7 @@ Notifications.setNotificationHandler({
 
 async function registerForPushNotificationsAsync() {
   if (Constants.executionEnvironment === "storeClient") {
-    console.log(
-      "Push notifications are skipped in Expo Go. Use a development build or production build for remote notifications.",
-    );
+    console.log("Push notifications are skipped in Expo Go.");
     return null;
   }
 
@@ -81,11 +75,17 @@ export default function App() {
   const webViewRef = useRef<WebView>(null);
   const waitingRef = useRef(false);
   const pushTokenRef = useRef<string | null>(null);
-  // Track whether the web app is ready to receive messages
   const webReadyRef = useRef(false);
+  const tokenSentRef = useRef(false); // guard: only send once per session
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const sendPushTokenToWeb = (token: string | null) => {
-    if (!token || !webViewRef.current || !webReadyRef.current) return;
+    // Already sent this session — skip
+    if (tokenSentRef.current) return;
+    // Nothing to send or WebView not mounted
+    if (!token || !webViewRef.current) return;
+    // Web app not ready yet — will be retried from WEB_READY / onLoadEnd
+    if (!webReadyRef.current) return;
 
     webViewRef.current.postMessage(
       JSON.stringify({
@@ -95,13 +95,45 @@ export default function App() {
         deviceName: Device.deviceName || "",
       }),
     );
+    tokenSentRef.current = true;
+    console.log("Push token sent to web:", token);
+  };
+
+  // Retry sender — called when web becomes ready but token may still be resolving.
+  // Polls every 300ms for up to 10s, then gives up.
+  const scheduleTokenRetry = () => {
+    if (retryTimerRef.current) return; // already scheduled
+    let attempts = 0;
+    const MAX_ATTEMPTS = 33; // ~10 seconds
+
+    const tick = () => {
+      if (tokenSentRef.current) return; // sent by now, stop
+      if (pushTokenRef.current) {
+        sendPushTokenToWeb(pushTokenRef.current);
+        return;
+      }
+      attempts++;
+      if (attempts < MAX_ATTEMPTS) {
+        retryTimerRef.current = setTimeout(tick, 300);
+      } else {
+        console.log("Push token never resolved — giving up.");
+      }
+    };
+
+    retryTimerRef.current = setTimeout(tick, 300);
   };
 
   useEffect(() => {
     registerForPushNotificationsAsync().then((token) => {
       pushTokenRef.current = token;
+      // Try to send immediately if web is already ready
       sendPushTokenToWeb(token);
+      // If web isn't ready yet, WEB_READY / onLoadEnd will pick it up
     });
+
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
   }, []);
 
   // ── Android back / side-slide gesture ──────────────────────────────────
@@ -109,7 +141,7 @@ export default function App() {
     if (Platform.OS !== "android") return;
 
     const triggerWebBack = () => {
-      if (waitingRef.current) return true; // debounce
+      if (waitingRef.current) return true;
 
       if (webViewRef.current && webReadyRef.current) {
         waitingRef.current = true;
@@ -133,16 +165,14 @@ export default function App() {
           })();
         `);
 
-        // Safety: reset if no reply within 500ms
         setTimeout(() => {
           waitingRef.current = false;
         }, 500);
       } else {
-        // WebView not ready yet — just minimize
         BackHandler.exitApp();
       }
 
-      return true; // always intercept
+      return true;
     };
 
     const sub = BackHandler.addEventListener(
@@ -175,7 +205,13 @@ export default function App() {
 
       if (data.type === "WEB_READY") {
         webReadyRef.current = true;
-        sendPushTokenToWeb(pushTokenRef.current);
+        if (pushTokenRef.current) {
+          // Token already resolved — send immediately
+          sendPushTokenToWeb(pushTokenRef.current);
+        } else {
+          // Token still resolving — poll until it's ready
+          scheduleTokenRetry();
+        }
         return;
       }
     } catch (e) {
@@ -194,10 +230,13 @@ export default function App() {
           style={styles.webview}
           onMessage={handleMessage}
           injectedJavaScriptBeforeContentLoaded={INJECTED_JS}
-          // Mark web as ready once the page finishes loading
           onLoadEnd={() => {
             webReadyRef.current = true;
-            sendPushTokenToWeb(pushTokenRef.current);
+            if (pushTokenRef.current) {
+              sendPushTokenToWeb(pushTokenRef.current);
+            } else {
+              scheduleTokenRetry();
+            }
           }}
           allowsInlineMediaPlayback
           mediaPlaybackRequiresUserAction={false}
