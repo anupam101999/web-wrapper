@@ -11,10 +11,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.calutta.canvasspace",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": [
-          "remote-notification"
-        ]
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "splash": {
@@ -24,9 +21,6 @@
     },
     "android": {
       "package": "com.calutta.canvasspace",
-      "permissions": [
-        "android.permission.POST_NOTIFICATIONS"
-      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/icon.png"

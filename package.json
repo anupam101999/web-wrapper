@@ -12,8 +12,6 @@
   "dependencies": {
     "expo": "~54.0.33",
     "expo-constants": "~18.0.13",
-    "expo-device": "~8.0.10",
-    "expo-notifications": "~0.32.17",
     "expo-splash-screen": "~31.0.13",
     "react": "19.1.0",
     "react-dom": "19.1.0",
