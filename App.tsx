@@ -76,15 +76,14 @@ export default function App() {
   const waitingRef = useRef(false);
   const pushTokenRef = useRef<string | null>(null);
   const webReadyRef = useRef(false);
-  const tokenSentRef = useRef(false); // guard: only send once per session
+  const lastSentTokenRef = useRef<string | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const sendPushTokenToWeb = (token: string | null) => {
-    // Already sent this session — skip
-    if (tokenSentRef.current) return;
+    if (lastSentTokenRef.current === token) return;
     // Nothing to send or WebView not mounted
     if (!token || !webViewRef.current) return;
-    // Web app not ready yet — will be retried from WEB_READY / onLoadEnd
+    // Wait for the web app's listener to be attached.
     if (!webReadyRef.current) return;
 
     webViewRef.current.postMessage(
@@ -95,11 +94,11 @@ export default function App() {
         deviceName: Device.deviceName || "",
       }),
     );
-    tokenSentRef.current = true;
+    lastSentTokenRef.current = token;
     console.log("Push token sent to web:", token);
   };
 
-  // Retry sender — called when web becomes ready but token may still be resolving.
+  // Retry sender: WEB_READY can arrive before Expo finishes resolving the token.
   // Polls every 300ms for up to 10s, then gives up.
   const scheduleTokenRetry = () => {
     if (retryTimerRef.current) return; // already scheduled
@@ -107,10 +106,10 @@ export default function App() {
     const MAX_ATTEMPTS = 33; // ~10 seconds
 
     const tick = () => {
-      if (tokenSentRef.current) return; // sent by now, stop
+      if (lastSentTokenRef.current === pushTokenRef.current) return;
       if (pushTokenRef.current) {
         sendPushTokenToWeb(pushTokenRef.current);
-        return;
+        if (lastSentTokenRef.current === pushTokenRef.current) return;
       }
       attempts++;
       if (attempts < MAX_ATTEMPTS) {
@@ -128,7 +127,7 @@ export default function App() {
       pushTokenRef.current = token;
       // Try to send immediately if web is already ready
       sendPushTokenToWeb(token);
-      // If web isn't ready yet, WEB_READY / onLoadEnd will pick it up
+      // If web isn't ready yet, WEB_READY will pick it up.
     });
 
     return () => {
@@ -230,13 +229,17 @@ export default function App() {
           style={styles.webview}
           onMessage={handleMessage}
           injectedJavaScriptBeforeContentLoaded={INJECTED_JS}
-          onLoadEnd={() => {
-            webReadyRef.current = true;
-            if (pushTokenRef.current) {
-              sendPushTokenToWeb(pushTokenRef.current);
-            } else {
-              scheduleTokenRetry();
+          onLoadStart={() => {
+            webReadyRef.current = false;
+            lastSentTokenRef.current = null;
+            if (retryTimerRef.current) {
+              clearTimeout(retryTimerRef.current);
+              retryTimerRef.current = null;
             }
+          }}
+          onLoadEnd={() => {
+            // Wait for WEB_READY before posting the token. onLoadEnd can fire
+            // before the React app has attached its message listener.
           }}
           allowsInlineMediaPlayback
           mediaPlaybackRequiresUserAction={false}
